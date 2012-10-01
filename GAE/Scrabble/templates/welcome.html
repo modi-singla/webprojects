@@ -30,29 +30,15 @@
 		</script>
 		
 		<script type="text/javascript">
-			function refresh_list()
-			{
-				//alert('a');
-				var url = '/buddy_list';
-				if($('#searchbox').hasClass('watermark')){}
-				else
-				{
-					url = url + '?search=' + $('#searchbox').val();
-				}
-				//alert(url);
-				$('#refresh_list').load(url);
-			};
 			$(document).ready(function()
 			{
-				$('#refresh').click(refresh_list);
-				$('#searchbox').keyup(refresh_list);
-				refresh_list();
+				
 			});
 		</script>
 	</head>
 	
 	
-	<body>
+	<body onload="onloadfns();" onunload="StopPoll()">
 		<div style="">
 			<br>
 			<div id="modal-dialog-mask"></div>
@@ -79,14 +65,14 @@
 			<br><br>
 			<div class="clear"/>
 			<div id="refresh_list">
-				<!--<ul id="online_list">
-					{% for user in online_users %}
+				<ul id="online_list">
+					<!--{% for user in online_users %}
 					<li id="{{ user.username }}">
 						<img src={% if user.state == 0 %}"static/available.jpg" {% else %} "static/busy.jpg" {% endif %}>
 						<div class="user_name"> {{ user.parent().fullname }} </div>
 					</li>
-					{% endfor %}
-				</ul>-->
+					{% endfor %}-->
+				</ul>
 			</div>
 		</div> <!-- Body wrapper -->
 	</body>

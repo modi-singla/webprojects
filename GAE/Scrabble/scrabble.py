@@ -26,7 +26,9 @@ import hashlib
 import random
 from string import letters
 from datetime import tzinfo, timedelta, datetime
-
+import time
+from threading import Thread
+import json
 from google.appengine.api import mail
 
 template_dir = os.path.join(os.path.dirname(__file__), 'templates')
@@ -80,10 +82,49 @@ def match_password(username, password, user):
 		return h == hash_password(password, salt)
 	else:
 		return False
+
+def complete_online_users_list_in_html(search_term = ""):
+	online_users = Online_User.all().filter("last_checked > ", datetime.now() - timedelta(minutes=1))
+	retval = "<ul id=\"online_list\">"
+	for user in online_users:
+		if (user.state != 4) and ((not search_term) or (search_term in user.parent().fullname) or (search_term in user.username)):
+			retval = retval + "<li class=\"opponent\" id=\"%s\">"% user.username
+			if user.state==0:
+				if (user.last_updated < datetime.now() - timedelta(minutes=5)):
+					retval = retval + "<img src=\"static/idle.jpg\">"
+				else:
+					retval = retval + "<img src=\"static/available.jpg\">"
+			else:
+				retval = retval + "<img src=\"static/busy.jpg\">"
+			retval = retval + "<div class=\"user_name\">%s</div></li>" % user.parent().fullname
+	retval = retval + "</ul>"
+	return retval
+	
+def complete_online_users_list_in_json(search_term = ""):
+	online_users = Online_User.all().filter("last_checked > ", datetime.now() - timedelta(minutes=1))
+	user_list = []
+	for user in online_users:
+		if (user.state != 4) and ((not search_term) or (search_term in user.parent().fullname) or (search_term in user.username)):
+			state = 0
+			if user.state==0:
+				if (user.last_updated < datetime.now() - timedelta(minutes=5)):
+					state=1
+				else:
+					state=0
+			else:
+				state = user.state
+			user_list.append({ 'id': user.username, 'state': state, 'name': user.parent().fullname })
+	json_dict = {'type' : 'user_list', 'user_list': user_list}
+	return json_dict
 		
 class BaseHandler(webapp2.RequestHandler):
 	def render(self, template, **kw):
 		self.response.out.write(render_str(template, **kw))
+		
+	def render_json(self, json_struct):
+		json_str = json.dumps(json_struct)
+		self.response.headers['Content-Type'] = 'application/json; charset=UTF-8'
+		self.write(json_str)
 
 	def write(self, *a, **kw):
 		self.response.out.write(*a, **kw)
@@ -106,6 +147,7 @@ class BaseHandler(webapp2.RequestHandler):
 		webapp2.RequestHandler.initialize(self, *a, **kw)
 		username = self.read_secure_cookie('user')
 		self.curr_user = get_user_by_username(username)
+
 		
 class MainPage(BaseHandler):
 	def get(self):
@@ -189,9 +231,30 @@ class Signout(BaseHandler):
 		self.logout()
 		if self.curr_user:
 			username = self.curr_user.username
-			Online_User.get_by_key_name(username, parent = self.curr_user).delete()
+			online_user = Online_User.get_by_key_name(username, parent = self.curr_user) or Online_User(parent = user, key_name = username, username = username)
+			online_user.last_updated = datetime.now()
+			online_user.last_checked = datetime.now()
+			online_user.state = 4
+			online_user.put()
 		self.redirect('/signin')
-						
+
+import logging
+	
+class Poll(BaseHandler, Thread):
+	def get(self):
+		if self.curr_user:
+			username = self.curr_user.username
+		else:
+			username = ""
+		user = self.curr_user
+		if valid_username(username) and user:
+			online_user = Online_User.get_by_key_name(username, parent = self.curr_user) or Online_User(parent = user, key_name = username, username = username)
+			current_online_users = Online_User.all().filter("last_updated > ", online_user.last_checked)
+			if (current_online_users.count()):
+				self.render_json(complete_online_users_list_in_json(self.request.get('search')))
+			online_user.last_checked = datetime.now()
+			online_user.put()
+		
 class Welcome(BaseHandler):
 	def get(self):
 		if self.curr_user:
@@ -200,10 +263,7 @@ class Welcome(BaseHandler):
 			username = ""
 		user = self.curr_user
 		if valid_username(username) and user:
-			online_user = Online_User(parent = user, key_name = username, username = username)
-			online_user.put()
-			current_online_users = Online_User.all().filter("last_updated > ", datetime.now() - timedelta(minutes=5))
-			self.render('welcome.html', user = user, online_users = current_online_users)
+			self.render('welcome.html', user = user)
 		else:
 			self.logout()
 			self.redirect('/signup')
@@ -216,23 +276,17 @@ class BuddyList(BaseHandler):
 			username = ""
 		user = self.curr_user
 		if valid_username(username) and user:
-			online_user = Online_User(parent = user, key_name = username, username = username)
+			online_user = Online_User.get_by_key_name(username, parent = self.curr_user) or Online_User(parent = user, key_name = username, username = username)
+			online_user.last_updated = datetime.now()
+			online_user.last_checked = datetime.now()
+			online_user.state=0
 			online_user.put()
-			current_online_users = Online_User.all()
-			search_term = self.request.get('search');
-			self.response.out.write("<ul id=\"online_list\">")
-			for user in current_online_users:
-				if (search_term in user.parent().fullname) or (search_term in user.username):
-					self.response.out.write("<li id=\"%s\">"% user.username)
-					if user.state==0:
-						if (user.last_updated < datetime.now() - timedelta(minutes=5)):
-							self.response.out.write("<img src=\"static/idle.jpg\">")
-						else:
-							self.response.out.write("<img src=\"static/available.jpg\">")
-					else:
-						self.response.out.write("<img src=\"static/busy.jpg\">")
-					self.response.out.write("<div class=\"user_name\">%s</div></li>" % user.parent().fullname)
-			self.response.out.write("</ul>")
+			self.render_json(complete_online_users_list_in_json(self.request.get('search')))
+
+class Ping(BaseHandler):
+	def get(self):
+		self.request.get('id')
+		
 			
 class User(db.Model):
 	username = db.StringProperty(required = True)
@@ -245,7 +299,7 @@ class Online_User(db.Model):
 	username = db.StringProperty(required = True)
 	state = db.IntegerProperty(required = True, default = 0)
 	opponent = db.StringProperty()
-	last_updated = db.DateTimeProperty(auto_now = True)
+	last_updated = db.DateTimeProperty()
+	last_checked = db.DateTimeProperty()
 						
-app = webapp2.WSGIApplication([('/', Welcome),	('/signup/?', Signup), ('/signin/?', Signin), ('/signout/?', Signout), ('/buddy_list', BuddyList)], debug=True)
-
+app = webapp2.WSGIApplication([('/', Welcome),	('/signup/?', Signup), ('/signin/?', Signin), ('/signout/?', Signout), ('/buddy_list', BuddyList), ('/pull', Poll), ('/ping', Ping)], debug=True)
